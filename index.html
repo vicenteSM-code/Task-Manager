@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Task Manager</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+*,*::before,*::after{box-sizing:border-box}
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+body{margin:0;font-size:14px}
+img{max-width:100%}
+[hidden]{display:none!important}
+/* Layout: one input for everything; one vertical lane (top = most urgent); side panel edits the selected task. Size + darkness = effort 1–10. Arrows = "needs this done first". */
+:root{
+  --bg:#ecdcdc; --surface:#f6eded; --fg:#1a1717; --muted:#7a6a6a; --line:#dcc6c6; --accent:#1a1717;
+  --display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  color-scheme:light;
+}
+html,body{background:var(--bg);color:var(--fg)}
+body{font-family:var(--display);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:24px 48px}
+.wrap{max-width:1100px;margin:0 auto;display:flex;flex-direction:column;gap:20px;transition:padding .2s}
+@media (min-width:1000px){body.panel-open .wrap{padding-right:380px}}
+header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px}
+h1{font-size:clamp(28px,5vw,44px);font-weight:800;margin:0;letter-spacing:-.02em}
+.total{font-family:var(--mono);font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+form#f{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px;display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
+.ask{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px}
+.askq{margin:0;flex-basis:100%;font-size:15px}
+.askq b{font-weight:500}
+.ask kbd,.ask .ghostbtn kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line);background:var(--bg);border-radius:5px;padding:1px 6px;color:var(--fg)}
+.nums{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.numrow{display:flex;align-items:flex-end;gap:6px;flex-wrap:wrap}
+.num{background:var(--fg);color:#fff;border-radius:10px;padding:0;width:2.2em;height:2.2em;font-family:var(--mono);line-height:1}
+.num:hover,.num:focus-visible{background:var(--bg);color:var(--fg);outline:2px solid var(--fg)}
+.ask .legend{width:auto;margin:0}
+input[type=text]{font:inherit;font-size:17px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);min-width:0;width:100%;box-sizing:border-box}
+.weight{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:13px;color:var(--muted)}
+.wbadge{display:inline-grid;place-items:center;flex:none;width:34px;height:34px;border-radius:50%;font-family:var(--mono);font-weight:500;font-size:15px;border:1px solid rgba(0,0,0,.15)}
+input[type=range]{width:160px;accent-color:var(--accent)}
+button{font:inherit;font-weight:500;cursor:pointer;border-radius:10px;border:0;padding:11px 18px;background:var(--accent);color:var(--bg)}
+button.ghostbtn{background:transparent;color:var(--fg);border:1px solid var(--line);padding:7px 11px;font-size:13px}
+button:disabled{opacity:.4;cursor:not-allowed}
+button:focus-visible,input:focus-visible,.bubble:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.legend{font-family:var(--mono);font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:8px;width:160px;margin-top:-4px}
+
+.board{display:grid;grid-template-columns:auto 1fr;gap:12px}
+.axis{display:flex;flex-direction:column;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding-block:8px}
+.axis .bar{flex:1;width:2px;margin:8px 0;background:linear-gradient(var(--fg),transparent);border-radius:2px;opacity:.35}
+.axis span{writing-mode:vertical-rl;transform:rotate(180deg)}
+.stage{position:relative;min-width:0;width:100%}
+#links{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:3}
+#links path.hit{pointer-events:stroke;stroke:transparent;stroke-width:16;fill:none;cursor:pointer}
+#links g.link:hover path.vis{stroke-width:3}
+#links path.vis{fill:none;stroke:var(--fg);stroke-width:2;stroke-dasharray:6 5;filter:drop-shadow(0 0 1px #fff) drop-shadow(0 0 2px #fff)}
+#temp{position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:5}
+#temp path{fill:none;stroke:var(--fg);stroke-width:2.5;filter:drop-shadow(0 0 1px #fff) drop-shadow(0 0 2px #fff)}
+#field{position:relative;z-index:1;display:flex;flex-direction:column;gap:10px;min-height:240px;padding:12px 0}
+
+.bubble{position:relative;width:100%;box-sizing:border-box;border-radius:18px;display:grid;grid-template-columns:1fr;row-gap:8px;align-items:baseline;padding-inline:18px;cursor:grab;border:1px solid rgba(255,255,255,.35);box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 1px 2px rgba(60,30,30,.06),0 8px 24px rgba(60,30,30,.08);touch-action:pan-y;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;transition:opacity .3s,transform .2s,box-shadow .2s}
+.bubble .t{font-weight:500;line-height:1.2;overflow-wrap:anywhere;min-width:0;text-wrap:pretty}
+.bubble .cnt{font-family:var(--mono);font-size:max(11px,.45em);font-weight:400;opacity:.6;margin-left:.5em;white-space:nowrap}
+.bubble .kids{display:flex;flex-wrap:wrap;gap:6px}
+/* Mother task: subtasks take the stage, its own title shrinks to the bottom-right corner */
+.bubble.parent{grid-template-areas:"kids" "t";row-gap:10px}
+.bubble.parent .kids{grid-area:kids;grid-column:auto}
+.bubble.parent .t{grid-area:t;justify-self:end;text-align:right;font-size:12px;font-weight:500;opacity:.75;letter-spacing:.02em}
+.bubble .kids{gap:8px}
+/* Default: subtasks hidden, mother task shows its own title. Hold Control to reveal subtasks. */
+:is(body.collapse:not(.peek):not(.linkdrag) .bubble.parent:not(.open),body.collapse.peek:not(.linkdrag) .bubble.parent:is(:not(:hover),.shut):not(.open)){grid-template-areas:"t"}
+:is(body.collapse:not(.peek):not(.linkdrag) .bubble.parent:not(.open),body.collapse.peek:not(.linkdrag) .bubble.parent:is(:not(:hover),.shut):not(.open)) .kids{display:none}
+:is(body.collapse:not(.peek):not(.linkdrag) .bubble.parent:not(.open),body.collapse.peek:not(.linkdrag) .bubble.parent:is(:not(:hover),.shut):not(.open)) .t{font-size:inherit;justify-self:start;text-align:left;opacity:1;letter-spacing:normal}
+.bubble .kid{line-height:1.2;font-weight:500;border-radius:12px;border:1px solid rgba(255,255,255,.3);box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 1px 3px rgba(0,0,0,.08);overflow-wrap:anywhere;max-width:100%;box-sizing:border-box}
+.bubble .kid.done{text-decoration:line-through;opacity:.45}
+.bubble .kid.blocked{border:2px dashed #7a6a6a;box-shadow:none}
+.bubble .kid.hl{border:2px dashed #7a6a6a;outline:2px dashed #fff;outline-offset:3px}
+.bubble.hl{outline:2px dashed #7a6a6a;outline-offset:3px}
+.bubble .kid.sel{outline:3px solid #fff;outline-offset:3px}
+.bubble .kid.target{box-shadow:0 0 0 3px #1a1717,0 0 0 6px #fff;transform:scale(1.05)}
+body.cmd .bubble .kid,body.linkdrag .bubble .kid,body.picking .bubble .kid{cursor:crosshair}
+.bubble.blocked{border:2px dashed var(--muted);box-shadow:none}
+.bubble.selected{outline:3px solid var(--accent);outline-offset:4px}
+.bubble.target{box-shadow:0 0 0 4px var(--bg),0 0 0 7px var(--fg)}
+.bubble.lifted{transform:scale(1.01)}
+.bubble.dragging{cursor:grabbing;z-index:10;pointer-events:none;box-shadow:0 14px 34px rgba(60,30,30,.25);transition:none}
+.bubble.nesting{transform:scale(.96);opacity:.8}
+.bubble.done{opacity:0;transform:translateX(30px)}
+.bubble.popping,.bubble .kid.popping{opacity:0;transform:scale(.85);transition:opacity .25s ease,transform .25s ease}
+#confetti{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:50}
+body.cmd .bubble{cursor:crosshair}
+body.picking .bubble{cursor:pointer}
+
+.empty{color:var(--muted);text-align:center;max-width:40ch}
+.hint{font-family:var(--mono);font-size:12px;color:var(--muted);line-height:1.7;max-width:62ch;margin:0 auto;display:grid;grid-template-columns:auto 1fr;gap:2px 14px}
+.hint kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line);background:var(--surface);border-radius:5px;padding:1px 6px;color:var(--fg);white-space:nowrap}
+.banner{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);font-family:var(--mono);font-size:13px;padding:10px 14px;border-radius:10px;display:flex;gap:12px;align-items:center;z-index:40;max-width:calc(100% - 32px);box-sizing:border-box}
+.banner button{background:var(--bg);color:var(--fg);padding:6px 10px;font-size:12px}
+
+/* Edit panel */
+#panel{position:fixed;top:0;right:0;bottom:0;width:min(370px,100%);box-sizing:border-box;background:var(--surface);border-left:1px solid var(--line);box-shadow:-8px 0 30px rgba(60,30,30,.08);z-index:30;overflow-y:auto;
+  padding:calc(20px + env(safe-area-inset-top,0px)) max(20px,env(safe-area-inset-right,0px)) calc(24px + env(safe-area-inset-bottom,0px)) 20px;display:flex;flex-direction:column;gap:18px}
+#panel h2{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0;font-weight:500}
+#panel .sec{display:flex;flex-direction:column;gap:8px}
+#panel .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.crumbs{display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-family:var(--mono);font-size:12px;color:var(--muted);min-width:0}
+.crumbs button{background:none;color:var(--muted);padding:2px 4px;font-size:12px;text-decoration:underline}
+#p-name{font-size:20px;font-weight:500}
+#panel .weight input[type=range]{flex:1;width:auto}
+.row{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
+.row .lbl{background:none;color:var(--fg);padding:0;text-align:left;font-weight:400;font-size:15px;min-width:0;overflow-wrap:anywhere}
+.row .lbl.done{text-decoration:line-through;color:var(--muted)}
+.row .acts{display:flex;gap:4px}
+.row .acts button{padding:5px 8px;font-size:12px}
+.row .mini{display:flex;align-items:center;gap:6px;grid-column:2/4}
+.row .mini input{flex:1;width:auto}
+.row .mini .wbadge{width:24px;height:24px;font-size:11px}
+.row input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent);margin:0}
+.note{font-family:var(--mono);font-size:12px;color:var(--muted);line-height:1.5;margin:0}
+.btns{display:flex;flex-wrap:wrap;gap:8px}
+.hdr-r{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.subbar{position:sticky;bottom:calc(-24px - env(safe-area-inset-bottom,0px));margin:auto -20px calc(-24px - env(safe-area-inset-bottom,0px));padding:14px 20px calc(16px + env(safe-area-inset-bottom,0px));background:var(--surface);border-top:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center}
+.subbar input{font-size:15px;padding:9px 11px}
+.subbar>button{padding:9px 14px;font-size:14px}
+.subask{grid-column:1/-1;display:flex;flex-direction:column;gap:8px;font-size:13px}
+.subask kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line);background:var(--bg);border-radius:5px;padding:1px 5px}
+.subask .numrow{gap:4px;flex-wrap:nowrap}
+.subask .num{width:28px;height:28px;flex:none;border-radius:8px}
+@media (max-width:640px){.subbar{margin-inline:calc(-1 * max(16px,env(safe-area-inset-left,0px))) calc(-1 * max(16px,env(safe-area-inset-right,0px)));padding-inline:max(16px,env(safe-area-inset-left,0px)) max(16px,env(safe-area-inset-right,0px))}}
+
+@media (max-width:640px){
+  form#f{grid-template-columns:1fr}.weight{justify-content:space-between}form#f input[type=range]{flex:1}.legend{width:auto}
+  #panel{top:auto;width:100%;max-height:78vh;border-left:0;border-top:1px solid var(--line);border-radius:18px 18px 0 0;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+}
+@media (prefers-reduced-motion:reduce){.bubble,.wrap{transition:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Task Manager</h1>
+    <div class="hdr-r"><span class="total" id="total"></span><button type="button" class="ghostbtn" id="export">Export</button><button type="button" class="ghostbtn" id="import">Import</button><input type="file" id="importFile" accept="application/json,.json" hidden></div>
+  </header>
+
+  <form id="f" autocomplete="off">
+    <input type="text" id="task" placeholder="Type anything that needs doing, press Enter" aria-label="Task">
+    <button type="submit">Add</button>
+    <div class="ask" id="ask" hidden>
+      <p class="askq">How big is <b id="askT"></b>? Press <kbd>1</kbd>–<kbd>9</kbd>, or <kbd>0</kbd> for 10.</p>
+      <div class="nums"><span class="legend">5 min</span><span id="nums" class="numrow"></span><span class="legend">huge</span></div>
+      <button type="button" class="ghostbtn" id="askCancel">Cancel <kbd>Esc</kbd></button>
+    </div>
+  </form>
+
+  <div class="board">
+    <div class="axis" aria-hidden="true"><span>Most urgent</span><div class="bar"></div><span>Least urgent</span></div>
+    <div class="stage">
+      <svg id="links" aria-hidden="true">
+        <defs><marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#1a1717" stroke="#fff" stroke-width="1"/></marker></defs>
+        <g id="paths"></g>
+      </svg>
+      <div id="field"></div>
+      <svg id="temp" aria-hidden="true"><path id="tempPath" d="" marker-end="url(#head)"/></svg>
+    </div>
+  </div>
+  <div class="hint">
+    <span><kbd>Drag</kbd></span><span>Move up or down to set urgency</span>
+    <span>Hold <kbd>Ctrl</kbd></span><span>Show subtasks of the task under your pointer</span>
+    <span><kbd>Ctrl</kbd> + click</span><span>Keep that task's subtasks open; Ctrl + click again to close</span>
+    <span>Tap <kbd>Ctrl</kbd> twice</span><span>Show every task's subtasks; tap twice again to close every task, including ones you kept open</span>
+    <span><kbd>Shift</kbd> + drag</span><span>Drop onto another task to make it a subtask</span>
+    <span><kbd>⌘</kbd> + drag</span><span>From one subtask to another: the one you drop on waits for the first and turns grey. Hover a grey subtask to see what it waits on</span>
+    <span><kbd>Click</kbd></span><span>Edit weight, subtasks, what it waits on, or mark done</span>
+    <span><kbd>⌘</kbd> + <kbd>Z</kbd></span><span>Bring back the last task you marked done or deleted</span>
+  </div>
+</div>
+
+<aside id="panel" hidden aria-label="Edit task"></aside>
+<div class="banner" id="banner" hidden><span id="bannerText"></span><button type="button" id="cancel">Cancel</button></div>
+
+<script>
+const KEY='my-tasks-v1';
+const $=id=>document.getElementById(id);
+const field=$('field'), paths=$('paths'), stage=document.querySelector('.stage'), panel=$('panel'), tempPath=$('tempPath');
+const banner=$('banner'), bannerText=$('bannerText');
+let tasks, sel=null, pick=null, drag=null;
+try{tasks=JSON.parse(localStorage.getItem(KEY))}catch(e){}
+if(!Array.isArray(tasks)) tasks=[
+  {id:1,t:"Example: Plan the trip",w:7,kids:[
+    {id:11,t:"Pick dates",w:2,done:true,kids:[],deps:[]},{id:12,t:"Book flights",w:4,kids:[],deps:[11]},{id:13,t:"Find a place to stay",w:6,kids:[],deps:[12]}]},
+  {id:2,t:"Example: Book dentist",w:1,kids:[]},
+  {id:3,t:"Example: Pack bags",w:3,kids:[]},
+  {id:4,t:"Example: Clean out inbox",w:4,kids:[]},
+  {id:5,t:"Example: Do my taxes",w:9,kids:[
+    {id:51,t:"Gather receipts",w:5,kids:[],deps:[]},{id:52,t:"Fill in the form",w:4,kids:[],deps:[51]}]}];
+const fix=k=>{k.kids=k.kids||[];k.deps=k.deps||[];k.kids.forEach(fix)};
+// Arrows only connect subtasks: clear any old task-to-task arrows
+tasks.forEach(k=>{fix(k);k.deps=[]});
+/* Tasks are saved in this browser's localStorage */
+let saveWarned=false;
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(tasks))}catch(e){if(!saveWarned){saveWarned=true;say('This browser isn’t saving your tasks (storage is blocked or full). Use Export to keep a copy.',5000)}}};
+const byId=id=>tasks.find(k=>k.id===id);
+function find(id,list=tasks,anc=[]){for(const k of list){if(k.id===id)return{node:k,list,anc};const r=find(id,k.kids,[...anc,k]);if(r)return r}return null}
+const uid=()=>Date.now()+Math.floor(Math.random()*1000);
+
+/* subtasks = the blocks shown inside a task */
+const subs=()=>tasks.flatMap(k=>k.kids.map(c=>({node:c,parent:k})));
+const subById=id=>{for(const k of tasks){const c=k.kids.find(x=>x.id===id);if(c)return c}return null};
+const parentOf=id=>tasks.find(k=>k.kids.some(c=>c.id===id));
+const isBlocked=c=>!c.done&&c.deps.some(id=>{const p=subById(id);return p&&!p.done});
+
+// 1 = white, 10 = black
+const light=n=>98-(n-1)*10.5;
+const fade=n=>{const L=light(n),hi=Math.min(100,L+14),lo=Math.max(0,L-6);return `linear-gradient(180deg,hsl(0 0% ${hi}%) 0%,hsl(0 0% ${L}%) 45%,hsl(0 0% ${lo}%) 100%)`};
+const paintBadge=(el,n)=>{el.textContent=n;el.style.background=fade(10);el.style.color='#fff'};
+const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const redraw=()=>requestAnimationFrame(drawLinks);
+
+function say(msg,ms){bannerText.textContent=msg;banner.hidden=false;$('cancel').hidden=!!ms;clearTimeout(say.t);if(ms)say.t=setTimeout(()=>banner.hidden=true,ms)}
+function stopPick(){pick=null;document.body.classList.remove('picking','linkdrag');banner.hidden=true;redraw()}
+$('cancel').onclick=stopPick;
+document.addEventListener('keydown',e=>{
+  if(e.key==='Meta')document.body.classList.add('cmd');
+  if(e.key==='Control'&&!e.repeat){
+    // Hold Ctrl: peek at the task under the pointer. Double-tap Ctrl toggles: show every task's subtasks, or close everything incl. pinned tasks
+    const now=Date.now();taps=(now-lastCtrlDown<400)?taps+1:1;lastCtrlDown=now;
+    if(taps===2&&allOn){taps=0;tasks.forEach(k=>k.open=false);allOn=false;ctrlSkip=true;save();render();hideKids();say('All tasks closed.',1500)}
+    else if(taps===2){taps=0;allOn=true;document.body.classList.remove('collapse','peek')}
+    else if(allOn){} // single tap does nothing while everything is shown
+    else document.body.classList.add('peek');
+    redraw();
+  }
+  if(e.key!=='Escape')return;if(pick)stopPick();else closePanel()});
+document.addEventListener('keyup',e=>{if(e.key==='Meta')document.body.classList.remove('cmd');if(e.key==='Control'){
+  if(ctrlSkip||allOn){ctrlSkip=false;lastCtrlUp=0;return}
+  lastCtrlUp=Date.now();hideKids()}});
+let lastCtrlUp=0,lastCtrlDown=0,taps=0,allOn=false,ctrlSkip=false,shutId=null;
+function hideKids(){shutId=null;field.querySelectorAll('.shut').forEach(x=>x.classList.remove('shut'));document.body.classList.add('collapse');document.body.classList.remove('peek');redraw()}
+window.addEventListener('blur',()=>{document.body.classList.remove('peek','cmd');if(!allOn)hideKids()});
+document.body.classList.add('collapse'); // subtasks hidden by default
+
+/* ---------- arrows between subtasks ---------- */
+function reaches(from,target,seen=new Set()){if(from===target)return true;if(seen.has(from))return false;seen.add(from);const k=subById(from);return !!k&&k.deps.some(d=>reaches(d,target,seen))}
+function addDep(waiter,first){
+  const a=subById(waiter),b=subById(first);
+  if(!a||!b){say('Only subtasks can wait on each other.',2500);return false}
+  if(a===b)return false;
+  if(reaches(first,waiter)){say(`That would make a loop: "${b.t}" already waits on "${a.t}".`,3500);return false}
+  if(!a.deps.includes(first))a.deps.push(first);return true;
+}
+function removeDep(waiter,first){const a=subById(waiter);if(a)a.deps=a.deps.filter(d=>d!==first)}
+function flipDep(waiter,first){removeDep(waiter,first);if(!addDep(first,waiter))subById(waiter).deps.push(first)}
+function dropRefs(ids){const s=new Set(ids);subs().forEach(({node})=>node.deps=node.deps.filter(d=>!s.has(d)))}
+function setDone(c,done){
+  if(done&&isBlocked(c)){const first=c.deps.map(subById).find(p=>p&&!p.done);say(`Finish "${first.t}" first.`,2500);return false}
+  c.done=done;return true;
+}
+
+/* ---------- task operations ---------- */
+function nest(id,parentId){
+  const k=byId(id),p=byId(parentId);if(!k||!p||k===p)return;
+  const kidIds=k.kids.map(c=>c.id),hadLinks=k.kids.some(c=>c.deps.length)||subs().some(s=>s.node.deps.some(d=>kidIds.includes(d)));
+  dropRefs(kidIds);k.kids.forEach(c=>c.deps=[]); // its subtasks are now a level deeper, where arrows don't apply
+  tasks=tasks.filter(x=>x!==k);
+  p.kids.push({id:k.id,t:k.t,w:k.w,done:false,kids:k.kids,deps:[]});
+  if(sel===id)sel=null;
+  save();render();if(sel!==null)renderPanel();
+  say(`"${k.t}" is now inside "${p.t}".${hadLinks?' Links between its subtasks were removed.':''}`,3000);
+}
+function unnest(id){
+  const f=find(id);if(!f||!f.anc.length)return;
+  const parent=f.anc[f.anc.length-1],top=f.anc[0],k=f.node;
+  dropRefs([k.id]);
+  parent.kids=parent.kids.filter(x=>x!==k);
+  tasks.splice(tasks.indexOf(top)+1,0,{id:k.id,t:k.t,w:k.w,deps:[],kids:k.kids});
+  save();openPanel(k.id);
+}
+/* ---------- done = deleted (with confetti), ⌘Z brings it back ---------- */
+const undoStack=[];
+function snapshot(label){undoStack.push({tasks:JSON.stringify(tasks),label});if(undoStack.length>50)undoStack.shift()}
+function undo(){
+  const u=undoStack.pop();if(!u){say('Nothing to undo.',1500);return}
+  tasks=JSON.parse(u.tasks);
+  if(sel!==null&&!find(sel))closePanel();
+  save();render();if(sel!==null)renderPanel();
+  say(`Brought back “${u.label}”.`,2200);
+}
+const allIds=k=>[k.id,...k.kids.flatMap(allIds)];
+function completeNode(id){
+  const f=find(id);if(!f)return;const k=f.node,isTop=!f.anc.length;
+  if(!isTop&&isBlocked(k)){const first=k.deps.map(subById).find(p=>p&&!p.done);say(`Finish “${first.t}” first.`,2500);return}
+  snapshot(k.t);
+  let el=isTop?field.querySelector(`.bubble[data-id="${id}"]`):field.querySelector(`.kid[data-sid="${id}"]`);
+  if(el&&!el.getBoundingClientRect().width)el=null;           // subtask hidden: burst from its task instead
+  const anchor=el||(f.anc[0]&&field.querySelector(`.bubble[data-id="${f.anc[0].id}"]`));
+  if(anchor)confetti(anchor.getBoundingClientRect());
+  const go=()=>{
+    const g=find(id);if(!g)return;const ids=allIds(g.node);
+    dropRefs(ids);g.list.splice(g.list.indexOf(g.node),1);
+    if(sel!==null&&ids.includes(sel))sel=isTop?null:g.anc[g.anc.length-1].id;
+    save();
+    if(sel===null)closePanel();else{render();renderPanel()}
+    say(`“${k.t}” done. ⌘Z to bring it back.`,3000);
+  };
+  if(el){el.classList.add('popping');setTimeout(go,260)}else go();
+}
+
+/* small confetti burst */
+const cv=document.createElement('canvas');cv.id='confetti';cv.setAttribute('aria-hidden','true');document.body.appendChild(cv);
+const cx2=cv.getContext('2d');let bits=[],raf=0;
+function confetti(r){
+  if(matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+  const dpr=devicePixelRatio||1;
+  if(cv.width!==innerWidth*dpr||cv.height!==innerHeight*dpr){cv.width=innerWidth*dpr;cv.height=innerHeight*dpr}
+  const cols=['#1a1717','#ffffff','#f2a7b8','#ffd166','#8fd3c1','#c9b6ff'];
+  const n=Math.round(Math.min(70,26+r.width/18)),cx=r.left+r.width/2,cy=r.top+r.height/2;
+  for(let i=0;i<n;i++){
+    const a=-Math.PI/2+(Math.random()-.5)*Math.PI*1.3,sp=3+Math.random()*6.5;
+    bits.push({x:cx+(Math.random()-.5)*Math.min(r.width*.7,260),y:cy,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp-2,
+      w:4+Math.random()*4,h:6+Math.random()*7,rot:Math.random()*6.3,vr:(Math.random()-.5)*.45,
+      c:cols[i%cols.length],round:Math.random()<.3,life:0,max:55+Math.random()*30});
+  }
+  if(!raf)raf=requestAnimationFrame(tick);
+}
+function tick(){
+  const dpr=devicePixelRatio||1;cx2.setTransform(dpr,0,0,dpr,0,0);cx2.clearRect(0,0,innerWidth,innerHeight);
+  bits=bits.filter(b=>b.life<b.max);
+  for(const b of bits){
+    b.vy+=.24;b.vx*=.985;b.x+=b.vx;b.y+=b.vy;b.rot+=b.vr;b.life++;
+    cx2.globalAlpha=Math.min(1,(b.max-b.life)/18);
+    cx2.save();cx2.translate(b.x,b.y);cx2.rotate(b.rot);cx2.fillStyle=b.c;cx2.strokeStyle='rgba(0,0,0,.18)';cx2.lineWidth=.6;
+    if(b.round){cx2.beginPath();cx2.arc(0,0,b.w/2,0,6.3);cx2.fill();if(b.c==='#ffffff')cx2.stroke()}
+    else{cx2.fillRect(-b.w/2,-b.h/2,b.w,b.h*Math.abs(Math.cos(b.life*.15+b.rot)));if(b.c==='#ffffff')cx2.strokeRect(-b.w/2,-b.h/2,b.w,b.h*Math.abs(Math.cos(b.life*.15+b.rot)))}
+    cx2.restore();
+  }
+  cx2.globalAlpha=1;
+  raf=bits.length?requestAnimationFrame(tick):0;
+}
+document.addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&!e.shiftKey&&e.key.toLowerCase()==='z'){
+    const a=document.activeElement;
+    if(a&&a.matches('input[type=text],textarea')&&a.value)return; // let the text box undo its own typing
+    e.preventDefault();undo();
+  }
+});
+
+function activate(id){
+  if(pick){
+    const p=pick;stopPick();
+    if(id!==p.from){if(p.type==='dep'){if(addDep(p.from,id))save()}else{nest(p.from,id);openPanel(id);return}}
+    openPanel(p.from);return;
+  }
+  openPanel(id);
+}
+
+/* ---------- board ---------- */
+function render(){
+  field.innerHTML='';
+  if(!tasks.length)field.innerHTML='<p class="empty">Nothing on the list. Type whatever comes to mind above and press Enter. Organize it after.</p>';
+  const selTop=sel!==null&&find(sel)?(find(sel).anc[0]||find(sel).node).id:null;
+  tasks.forEach(k=>{
+    const b=document.createElement('div');
+    const open=k.kids.filter(x=>!x.done).length,total=k.kids.length;
+    b.className='bubble'+(selTop===k.id?' selected':'');
+    b.tabIndex=0;b.setAttribute('role','button');b.dataset.id=k.id;
+    b.setAttribute('aria-label',`${k.t}, weight ${k.w}${total?`, ${total-open} of ${total} subtasks done`:''}. Edit`);
+    b.style.cssText=`background:${fade(10)};color:#fff;font-size:${Math.round(13+(k.w-1)*4.6)}px;padding-block:${Math.round(6+k.w*2)}px`;
+    if(total)b.classList.add('parent');
+    if(k.open)b.classList.add('open');
+    if(k.id===shutId){b.classList.add('shut');b.addEventListener('pointerleave',()=>{shutId=null;b.classList.remove('shut')},{once:true})}
+    const kidDots=k.kids.map(c=>{const bl=isBlocked(c);return `<span class="kid${c.done?' done':''}${bl?' blocked':''}${sel===c.id?' sel':''}" data-sid="${c.id}"${bl?' title="Waiting on another subtask"':''} style="background:${bl?'#cfcfcf':'#fff'};color:#1a1717;font-size:${Math.round(12+(c.w-1)*2.8)}px;padding:${Math.round(5+c.w*1.2)}px ${Math.round(9+c.w*1.4)}px">${esc(c.t)}</span>`}).join('');
+    b.innerHTML=`<span class="t">${esc(k.t)}${total?`<span class="cnt">${total-open}/${total}</span>`:''}</span>${total?`<span class="kids">${kidDots}</span>`:''}`;
+    b.onkeydown=e=>{
+      if(e.key==='Enter'||e.key===' '){e.preventDefault();activate(k.id)}
+      if(e.key==='ArrowUp'||e.key==='ArrowDown'){e.preventDefault();const i=tasks.indexOf(k),j=i+(e.key==='ArrowUp'?-1:1);if(j<0||j>=tasks.length)return;[tasks[i],tasks[j]]=[tasks[j],tasks[i]];save();render();field.querySelector(`[data-id="${k.id}"]`).focus()}};
+    field.appendChild(b);
+  });
+  $('total').textContent=`${tasks.length} tasks · total weight ${tasks.reduce((s,k)=>s+k.w,0)}`;
+  redraw();
+}
+
+function boxes(){
+  const sr=stage.getBoundingClientRect(),pos={};
+  field.querySelectorAll('.kid').forEach(el=>{const r=el.getBoundingClientRect();if(!r.width)return;
+    pos[el.dataset.sid]={t:r.top-sr.top,b:r.bottom-sr.top,cx:r.left-sr.left+r.width/2}});
+  return pos;
+}
+function route(a,b){
+  const v=(x1,y1,x2,y2)=>{const k=Math.max(18,Math.abs(y2-y1)*.45),s=Math.sign(y2-y1);return `M${x1},${y1} C${x1},${y1+s*k} ${x2},${y2-s*k} ${x2},${y2}`};
+  if(b.t>a.b+4)return v(a.cx,a.b+2,b.cx,b.t-4);   // target below
+  if(a.t>b.b+4)return v(a.cx,a.t-2,b.cx,b.b+4);   // target above
+  const y=Math.min(a.t,b.t)-Math.min(40,16+Math.abs(b.cx-a.cx)*.08); // same row: arc over the top
+  return `M${a.cx},${a.t-2} C${a.cx},${y} ${b.cx},${y} ${b.cx},${b.t-4}`;
+}
+function drawLinks(){paths.innerHTML=''} // links are no longer drawn as arrows
+/* Hover a waiting (grey) subtask: give the subtasks it waits on a dotted border */
+function clearHl(){field.querySelectorAll('.hl').forEach(x=>x.classList.remove('hl'))}
+field.addEventListener('pointerover',e=>{
+  clearHl();const c=e.target.closest('.kid');if(!c||!c.classList.contains('blocked'))return;
+  subById(+c.dataset.sid).deps.forEach(id=>{const p=subById(id);if(!p||p.done)return;
+    const el=field.querySelector(`.kid[data-sid="${id}"]`);
+    if(el&&el.getBoundingClientRect().width)el.classList.add('hl');
+    else{const par=parentOf(id),bar=par&&field.querySelector(`.bubble[data-id="${par.id}"]`);bar&&bar.classList.add('hl')} // its task is closed: mark the task
+  });
+});
+field.addEventListener('pointerleave',clearHl);
+field.addEventListener('contextmenu',e=>{if(e.ctrlKey&&e.target.closest('.bubble'))e.preventDefault()});
+
+/* ---------- pointer: drag to reorder, Shift+drag to nest, ⌘+drag between subtasks to draw an arrow ---------- */
+function bubbleAt(x,y){const el=document.elementFromPoint(x,y),b=el&&el.closest&&el.closest('#field .bubble');return b&&+b.dataset.id!==drag.id?b:null}
+function chipAt(x,y){const el=document.elementFromPoint(x,y),c=el&&el.closest&&el.closest('#field .kid');return c&&+c.dataset.sid!==drag.sid?c:null}
+function setTarget(b){field.querySelectorAll('.target').forEach(x=>x!==b&&x.classList.remove('target'));if(b)b.classList.add('target')}
+function drawTemp(x,y){
+  const sr=stage.getBoundingClientRect(),src=field.querySelector(`.kid[data-sid="${drag.sid}"]`);if(!src)return;
+  const r=src.getBoundingClientRect(),ax=r.left-sr.left+r.width/2,ay=r.top-sr.top+r.height/2,px=x-sr.left,py=y-sr.top;
+  if(Math.hypot(px-ax,py-ay)<r.height/2+6){tempPath.setAttribute('d','');return}
+  tempPath.setAttribute('d',`M${ax},${ay} Q${(ax+px)/2},${Math.min(ay,py)-30} ${px},${py}`);
+}
+field.addEventListener('pointerdown',e=>{
+  const b=e.target.closest('.bubble');if(!b)return;
+  const chip=e.target.closest('.kid');
+  if(e.metaKey&&e.button===0){ // ⌘ + drag: arrow from one subtask to another
+    e.preventDefault();
+    if(!chip){say('Only subtasks can wait on each other. Show subtasks with Ctrl, then ⌘ + drag from one subtask to another.',3500);return}
+    drag={link:true,sid:+chip.dataset.sid,el:chip,started:true};
+    document.body.classList.add('linkdrag'); // show every task's subtasks while drawing
+    drawTemp(e.clientX,e.clientY);redraw();return;
+  }
+  if(e.ctrlKey&&(e.button===0||e.button===2)){ // Ctrl + click: keep this task's subtasks open (click again to close)
+    e.preventDefault();const k=byId(+b.dataset.id);if(!k)return;
+    if(!k.kids.length){say('This task has no subtasks yet.',1800);return}
+    k.open=!k.open;shutId=k.open?null:k.id; // closing: stay closed even though Ctrl is still held over it
+    save();render();return;
+  }
+  if(e.button!==0)return;
+  if(pick){
+    if(pick.type==='dep'){if(chip)activate(+chip.dataset.sid);else say('Click a subtask.',1800)}
+    else activate(+b.dataset.id);
+    return;
+  }
+  drag={id:+b.dataset.id,el:b,chip:chip?+chip.dataset.sid:null,x0:e.clientX,y0:e.clientY,started:false,mouse:e.pointerType==='mouse',ready:e.pointerType==='mouse'};
+  if(!drag.mouse)drag.timer=setTimeout(()=>{if(drag&&!drag.started){drag.ready=true;b.classList.add('lifted');navigator.vibrate&&navigator.vibrate(10)}},220);
+});
+window.addEventListener('pointermove',e=>{
+  if(!drag)return;
+  if(drag.link){drawTemp(e.clientX,e.clientY);setTarget(chipAt(e.clientX,e.clientY));return}
+  if(!drag.started){
+    if(Math.hypot(e.clientX-drag.x0,e.clientY-drag.y0)<6)return;
+    if(!drag.ready){clearTimeout(drag.timer);drag=null;return} // finger is scrolling
+    const r=drag.el.getBoundingClientRect();
+    drag.gx=e.clientX-r.left;drag.gy=e.clientY-r.top;drag.started=true;
+    drag.el.classList.remove('lifted');drag.el.classList.add('dragging');
+  }
+  e.preventDefault();
+  const el=drag.el,nestMode=e.shiftKey,target=nestMode?bubbleAt(e.clientX,e.clientY):null;
+  el.classList.toggle('nesting',!!target);setTarget(target);
+  if(!nestMode){
+    const others=[...field.querySelectorAll('.bubble')].filter(o=>o!==el);
+    const idx=others.filter(o=>{const r=o.getBoundingClientRect();return r.top+r.height/2<e.clientY}).length;
+    const ref=others[idx]||null;
+    if(el.nextElementSibling!==ref)field.insertBefore(el,ref);
+  }
+  el.style.translate='0 0';
+  const r=el.getBoundingClientRect();
+  el.style.translate=`${e.clientX-drag.gx-r.left}px ${e.clientY-drag.gy-r.top}px`;
+  drawLinks();
+});
+document.addEventListener('touchmove',e=>{if(drag&&drag.ready&&!drag.link)e.preventDefault()},{passive:false});
+function endDrag(e,cancelled){
+  if(!drag)return;const d=drag;clearTimeout(d.timer);
+  let target=null;
+  if(!cancelled&&d.link)target=chipAt(e.clientX,e.clientY);
+  else if(!cancelled&&d.started)target=bubbleAt(e.clientX,e.clientY);
+  drag=null;
+  setTarget(null);tempPath.setAttribute('d','');d.el.classList.remove('lifted');
+  if(d.link){document.body.classList.remove('linkdrag');
+    if(target&&addDep(+target.dataset.sid,d.sid))save();
+    render();if(sel!==null)renderPanel();return}
+  if(cancelled){render();return}
+  if(!d.started){activate(d.chip??d.id);return}
+  if(e.shiftKey&&target){nest(d.id,+target.dataset.id);return}
+  tasks=[...field.querySelectorAll('.bubble')].map(el=>byId(+el.dataset.id)).filter(Boolean);
+  save();render();
+}
+window.addEventListener('pointerup',e=>endDrag(e,false));
+window.addEventListener('pointercancel',e=>endDrag(e,true));
+
+/* ---------- panel ---------- */
+function openPanel(id,focusDeps){sel=id;document.body.classList.add('panel-open');renderPanel();render();
+  if(focusDeps){const s=$('deps-sec');s&&s.scrollIntoView({block:'nearest'})}}
+function closePanel(){if(pendingParent!==null){pending=null;pendingParent=null}sel=null;panel.hidden=true;document.body.classList.remove('panel-open');render()}
+function startPick(type,from,msg){pick={type,from};document.body.classList.add('picking');if(type==='dep')document.body.classList.add('linkdrag');say(msg);redraw()}
+
+function depRow(other,waiter,first){
+  const par=parentOf(other.id),where=par&&par!==parentOf(sel)?` <span class="note">· ${esc(par.t)}</span>`:'';
+  return `<div class="row"><span></span><span class="lbl${other.done?' done':''}">${esc(other.t)}${where}</span><span class="acts">
+    <button type="button" class="ghostbtn" data-flip="${waiter},${first}" title="Reverse which one waits">⇄ Flip</button>
+    <button type="button" class="ghostbtn" data-undep="${waiter},${first}" aria-label="Remove link">✕</button></span></div>`;
+}
+function renderPanel(){
+  const f=sel!==null&&find(sel);if(!f){closePanel();return}
+  const {node:k,anc}=f,isTop=!anc.length,isSub=anc.length===1;
+  const blocked=isSub&&isBlocked(k);
+  const kidsHtml=k.kids.map(c=>{const bl=isTop&&isBlocked(c);return `<div class="row">
+      <input type="checkbox" data-check="${c.id}" ${c.done?'checked':''} ${bl?'disabled title="Waiting on another subtask"':''} aria-label="Done: ${esc(c.t)}">
+      <button type="button" class="lbl${c.done?' done':''}" data-open="${c.id}" title="Open">${esc(c.t)}${c.kids.length?` <span class="note">(${c.kids.length})</span>`:''}${bl?' <span class="note">· waiting</span>':''}</button>
+      <span class="acts"><button type="button" class="ghostbtn" data-out="${c.id}" title="Move back to the main list">↑ Out</button></span>
+      <label class="mini"><input type="range" min="1" max="10" value="${c.w}" data-kw="${c.id}" aria-label="Weight of ${esc(c.t)}"><output class="wbadge" data-kwo="${c.id}"></output></label>
+    </div>`}).join('');
+  let depsHtml='';
+  if(isSub){
+    const waits=k.deps.map(subById).filter(Boolean),needed=subs().filter(s=>s.node.deps.includes(k.id)).map(s=>s.node);
+    depsHtml=`<div class="sec" id="deps-sec"><h2>Waits on</h2>
+      ${waits.map(o=>depRow(o,k.id,o.id)).join('')||'<p class="note">Nothing. This subtask can start any time.</p>'}</div>
+      <div class="sec"><h2>Needed by</h2>
+      ${needed.map(o=>depRow(o,o.id,k.id)).join('')||'<p class="note">No subtask is waiting on this one.</p>'}
+      <div class="btns"><button type="button" class="ghostbtn" id="p-link">+ Pick a subtask this waits on</button></div></div>`;
+  }
+  panel.innerHTML=`
+    <div class="top"><div class="crumbs">${anc.length?anc.map(a=>`<button type="button" data-open="${a.id}">${esc(a.t)}</button><span>›</span>`).join(''):'<span>Task</span>'}</div>
+      <button type="button" class="ghostbtn" id="p-close" aria-label="Close panel">✕</button></div>
+    <div class="sec"><input type="text" id="p-name" value="${esc(k.t)}" aria-label="Task name"></div>
+    <div class="sec"><h2>Weight</h2>
+      <label class="weight" for="p-w"><span>5 min</span><input type="range" id="p-w" min="1" max="10" value="${k.w}"><span>huge</span><output class="wbadge" id="p-wo"></output></label>
+      ${k.kids.length?`<p class="note">Subtasks split this task up; they don't add to it. Set this to how big the whole thing feels now.</p>`:''}</div>
+    <div class="sec"><h2>Subtasks${k.kids.length?` · ${k.kids.filter(c=>c.done).length}/${k.kids.length} done`:''}</h2>
+      ${kidsHtml||'<p class="note">None yet. Write one in the bar below, or Shift + drag another task onto this one.</p>'}
+      ${isTop&&k.kids.length>1?'<p class="note">⌘ + drag from one subtask to another to make it wait.</p>':''}</div>
+    ${depsHtml}
+    <div class="btns">
+      ${isTop?`<button type="button" id="p-done">Mark done</button>`:`<button type="button" id="p-kdone" ${blocked?'disabled':''}>${k.done?'Mark not done':'Mark done'}</button><button type="button" class="ghostbtn" id="p-out">↑ Move to main list</button>`}
+      ${isTop?'<button type="button" class="ghostbtn" id="p-nest">Put inside…</button>':''}
+      <button type="button" class="ghostbtn" id="p-delete">Delete</button></div>
+    ${blocked?'<p class="note">Finish the subtasks it waits on first, or remove those links.</p>':''}
+    <form class="subbar" id="p-subf" autocomplete="off">
+      <input type="text" id="p-sub" placeholder="Add a subtask, press Enter" aria-label="New subtask">
+      <button type="submit">Add</button>
+      <div class="subask" id="p-ask" hidden>
+        <span>How big? Press <kbd>1</kbd>–<kbd>9</kbd>, or <kbd>0</kbd> for 10. <kbd>Esc</kbd> cancels.</span>
+        <span class="numrow">${[1,2,3,4,5,6,7,8,9,10].map(n=>`<button type="button" class="num" data-sn="${n}" style="font-size:${Math.round(10+n*.7)}px" aria-label="Weight ${n}">${n}</button>`).join('')}</span>
+      </div>
+    </form>`;
+  panel.hidden=false;
+  $('p-subf').onsubmit=e=>{e.preventDefault();if(pending!==null)return;const t=$('p-sub').value.trim();if(t)askWeight(t,k.id)};
+  panel.querySelectorAll('[data-sn]').forEach(b=>b.onclick=()=>{if(pending!==null&&pendingParent===k.id)addTask(+b.dataset.sn)});
+  if(pending!==null&&pendingParent===k.id){$('p-sub').value=pending;$('p-sub').readOnly=true;$('p-ask').hidden=false}
+
+  paintBadge($('p-wo'),k.w);
+  k.kids.forEach(c=>paintBadge(panel.querySelector(`[data-kwo="${c.id}"]`),c.w));
+  $('p-close').onclick=closePanel;
+  $('p-name').oninput=e=>{k.t=e.target.value||'Untitled';save();render()};
+  $('p-w').oninput=e=>{k.w=+e.target.value;paintBadge($('p-wo'),k.w);save();render()};
+  const del=$('p-delete');
+  del.onclick=()=>{if(del.dataset.armed){
+      snapshot(k.t);
+      if(isTop){dropRefs(k.kids.map(c=>c.id));tasks=tasks.filter(x=>x.id!==k.id);sel=null}
+      else{dropRefs([k.id]);const p=anc[anc.length-1];p.kids=p.kids.filter(x=>x.id!==k.id);sel=p.id}
+      save();sel===null?closePanel():(renderPanel(),render());
+    }else{del.dataset.armed=1;del.textContent='Click again to delete'}};
+  if(isTop){
+    $('p-done').onclick=()=>completeNode(k.id);
+    $('p-nest').onclick=()=>startPick('nest',k.id,`Click the task "${k.t}" should go inside.`);
+  }else{
+    $('p-kdone').onclick=()=>{if(k.done){k.done=false;save();render();renderPanel()}else completeNode(k.id)};
+    $('p-out').onclick=()=>unnest(k.id);
+  }
+  if(isSub)$('p-link').onclick=()=>startPick('dep',k.id,`Click the subtask "${k.t}" has to wait for.`);
+  panel.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openPanel(+b.dataset.open));
+  panel.querySelectorAll('[data-out]').forEach(b=>b.onclick=()=>{unnest(+b.dataset.out);openPanel(k.id)});
+  panel.querySelectorAll('[data-check]').forEach(c=>c.onchange=()=>{const n=find(+c.dataset.check).node;if(c.checked){c.checked=false;completeNode(n.id)}else{n.done=false;save();render();renderPanel()}});
+  panel.querySelectorAll('[data-kw]').forEach(r=>r.oninput=()=>{const c=find(+r.dataset.kw).node;c.w=+r.value;paintBadge(panel.querySelector(`[data-kwo="${c.id}"]`),c.w);save();render()});
+  panel.querySelectorAll('[data-undep]').forEach(b=>b.onclick=()=>{const [a,c]=b.dataset.undep.split(',').map(Number);removeDep(a,c);save();render();renderPanel()});
+  panel.querySelectorAll('[data-flip]').forEach(b=>b.onclick=()=>{const [a,c]=b.dataset.flip.split(',').map(Number);flipDep(a,c);save();render();renderPanel()});
+}
+
+new ResizeObserver(redraw).observe(stage);
+document.fonts&&document.fonts.ready.then(drawLinks);
+
+/* Write a task, press Enter, then press a number for its weight */
+let pending=null,pendingParent=null; // pendingParent: the task a new subtask goes into (null = main list)
+const ask=$('ask'),taskIn=$('task');
+$('nums').innerHTML=[1,2,3,4,5,6,7,8,9,10].map(n=>`<button type="button" class="num" data-n="${n}" style="font-size:${Math.round(11+n*1.3)}px" aria-label="Weight ${n}">${n}</button>`).join('');
+function askWeight(t,parent=null){
+  pending=t;pendingParent=parent;
+  if(parent!==null){$('p-sub').readOnly=true;$('p-ask').hidden=false;return}
+  $('askT').textContent=`“${t}”`;ask.hidden=false;taskIn.readOnly=true;
+}
+function stopAsk(keepText){
+  const par=pendingParent;pending=null;pendingParent=null;
+  if(par!==null){const pa=$('p-ask'),pi=$('p-sub');if(pa)pa.hidden=true;if(pi){pi.readOnly=false;if(!keepText)pi.value='';pi.focus()}return}
+  ask.hidden=true;taskIn.readOnly=false;if(!keepText)taskIn.value='';taskIn.focus();
+}
+function addTask(n){
+  const t=pending,par=pendingParent;stopAsk(false);
+  if(par!==null){
+    const f=find(par);if(!f)return;
+    f.node.kids.push({id:uid(),t,w:n,kids:[],deps:[]});
+    save();render();renderPanel();$('p-sub').focus();return;
+  }
+  if(tasks.some(k=>k.t.startsWith('Example:'))){tasks=tasks.filter(k=>!k.t.startsWith('Example:'));if(sel!==null&&!find(sel))closePanel()}
+  tasks.push({id:uid(),t,w:n,deps:[],kids:[]});save();render();
+}
+document.addEventListener('keydown',e=>{
+  if(pending===null)return;
+  if(/^[0-9]$/.test(e.key)&&!e.metaKey&&!e.ctrlKey){e.preventDefault();e.stopImmediatePropagation();addTask(e.key==='0'?10:+e.key)}
+  else if(e.key==='Escape'){e.preventDefault();e.stopImmediatePropagation();stopAsk(true)}
+},true);
+$('nums').onclick=e=>{const b=e.target.closest('.num');if(b&&pending!==null)addTask(+b.dataset.n)};
+$('askCancel').onclick=()=>stopAsk(true);
+$('f').onsubmit=e=>{
+  e.preventDefault();if(pending!==null)return;
+  const t=taskIn.value.trim();if(!t)return;
+  askWeight(t);
+};
+/* ---------- Export / Import (JSON file) ---------- */
+function today(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
+$('export').onclick=()=>{
+  const data=JSON.stringify({app:'Task Manager',version:1,exportedAt:new Date().toISOString(),taskCount:tasks.length,tasks},null,2);
+  const url=URL.createObjectURL(new Blob([data],{type:'application/json'}));
+  const a=document.createElement('a');a.href=url;a.download=`tasks-${today()}.json`;
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+  say('Tasks exported.',2000);
+};
+const validNode=(k,top)=>k&&typeof k==='object'&&typeof k.t==='string'&&Number.isFinite(+k.w)&&(k.kids===undefined||Array.isArray(k.kids))&&(k.kids||[]).every(c=>validNode(c,false));
+function clean(k){return{id:Number.isFinite(+k.id)?+k.id:uid(),t:k.t.slice(0,500),w:Math.min(10,Math.max(1,Math.round(+k.w))),done:!!k.done,open:!!k.open,
+  deps:Array.isArray(k.deps)?k.deps.map(Number).filter(Number.isFinite):[],kids:(k.kids||[]).map(clean)}}
+$('import').onclick=()=>{$('importFile').value='';$('importFile').click()};
+$('importFile').onchange=async e=>{
+  const file=e.target.files[0];if(!file)return;
+  let list;
+  try{const j=JSON.parse(await file.text());list=Array.isArray(j)?j:j&&j.tasks}
+  catch(err){say('That file isn’t valid JSON. Choose a file made with Export.',3500);return}
+  if(!Array.isArray(list)||!list.every(k=>validNode(k,true))){say('That file doesn’t contain a task list. Choose a file made with Export.',3500);return}
+  if(tasks.length&&!confirm(`Replace your ${tasks.length} current task${tasks.length>1?'s':''} with the ${list.length} in “${file.name}”? You can undo with ⌘Z / Ctrl+Z.`))return;
+  snapshot('your previous tasks');
+  tasks=list.map(clean);tasks.forEach(k=>{fix(k);k.deps=[]});
+  if(sel!==null&&!find(sel))closePanel();
+  save();render();if(sel!==null)renderPanel();
+  say(`Imported ${tasks.length} task${tasks.length===1?'':'s'}.`,2500);
+};
+
+/* Ask the browser to keep this site's storage (not cleared under storage pressure) */
+if(navigator.storage&&navigator.storage.persist){
+  navigator.storage.persisted().then(p=>p||navigator.storage.persist()).catch(()=>{});
+}
+render();
+
+</script>
+</body>
+</html>
+
